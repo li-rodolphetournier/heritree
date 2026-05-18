@@ -318,6 +318,50 @@ export function AccueilClient({ initialDisplayedMessages }: AccueilClientProps) 
                 </>
               )}
 
+              {/* Généalogie - accessible selon visibilité */}
+              {canSeeCard('genealogie') && (
+                <FadeInStaggerItem>
+                  <motion.div
+                    whileHover={{ y: -5, transition: { duration: 0.2 } }}
+                    whileTap={{ scale: 0.98 }}
+                    style={{ display: 'block', height: '100%' }}
+                    className="relative"
+                  >
+                    {user?.status === 'administrateur' && (
+                      <div className="absolute top-2 left-2 z-10">
+                        <label className="flex items-center gap-2 px-2 rounded">
+                          <input
+                            type="checkbox"
+                            checked={cardVisibility['genealogie']}
+                            onChange={() => toggleCardVisibility('genealogie')}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-4 h-4 text-green-600 focus:ring-green-500 border-gray-300 rounded"
+                          />
+                          <span className="text-xs text-gray-600">Afficher</span>
+                        </label>
+                      </div>
+                    )}
+                    <Link
+                      href="/genealogie"
+                      className="group relative bg-white dark:bg-gray-800 p-6 focus-within:ring-2 focus-within:ring-inset focus-within:ring-green-500 rounded-lg shadow-sm hover:shadow-md transition-shadow block h-full border border-gray-400 dark:border-gray-700"
+                      aria-label="Accéder à l'arbre généalogique"
+                    >
+                      <div className="flex items-center space-x-4">
+                        <div className="flex-shrink-0 h-10 w-10 rounded-lg bg-green-500 flex items-center justify-center">
+                          <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                          </svg>
+                        </div>
+                        <div>
+                          <h2 className="text-xl font-medium text-gray-900 dark:text-white">Généalogie</h2>
+                          <p className="mt-1 text-sm text-gray-500 dark:text-gray-300">Visualiser l&apos;arbre généalogique</p>
+                        </div>
+                      </div>
+                    </Link>
+                  </motion.div>
+                </FadeInStaggerItem>
+              )}
+
               {/* Alternatives de visualisation généalogique */}
               {/* Généalogie Visx - accessible selon visibilité */}
               {canSeeCard('genealogie-visx') && (
@@ -363,6 +407,106 @@ export function AccueilClient({ initialDisplayedMessages }: AccueilClientProps) 
                             )}
                           </div>
                           <p className="mt-1 text-sm text-gray-500 dark:text-gray-300">Visiualiser l'Arbre Généalogique</p>
+                        </div>
+                      </div>
+                    </Link>
+                  </motion.div>
+                </FadeInStaggerItem>
+              )}
+
+              {/* Généalogie Nivo - accessible selon visibilité */}
+              {canSeeCard('genealogie-nivo') && (
+                <FadeInStaggerItem>
+                  <motion.div
+                    whileHover={{ y: -5, transition: { duration: 0.2 } }}
+                    whileTap={{ scale: 0.98 }}
+                    style={{ display: 'block', height: '100%' }}
+                    className="relative"
+                  >
+                    {user?.status === 'administrateur' && (
+                      <div className="absolute top-2 left-2 z-10">
+                        <label className="flex items-center gap-2 px-2 rounded">
+                          <input
+                            type="checkbox"
+                            checked={cardVisibility['genealogie-nivo']}
+                            onChange={() => toggleCardVisibility('genealogie-nivo')}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-4 h-4 text-cyan-600 focus:ring-cyan-500 border-gray-300 rounded"
+                          />
+                          <span className="text-xs text-gray-600">Afficher</span>
+                        </label>
+                      </div>
+                    )}
+                    <Link
+                      href="/genealogie-alternatives/nivo"
+                      className="group relative bg-white dark:bg-gray-800 p-6 focus-within:ring-2 focus-within:ring-inset focus-within:ring-cyan-500 rounded-lg shadow-sm hover:shadow-md transition-shadow block h-full border border-gray-400 dark:border-gray-700 opacity-75"
+                      aria-label="Accéder à l'arbre généalogique avec Nivo"
+                    >
+                      <div className="flex items-center space-x-4">
+                        <div className="flex-shrink-0 h-10 w-10 rounded-lg bg-cyan-500 flex items-center justify-center">
+                          <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+                          </svg>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 justify-between">
+                            <h2 className="text-xl font-medium text-gray-900 dark:text-white">Généalogie Nivo</h2>
+                            {user?.status === 'administrateur' && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-cyan-100 text-cyan-800 whitespace-nowrap">
+                                Alternative 2
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-sm text-gray-500 dark:text-gray-300">Arbre avec Nivo - Composants prêts à l&apos;emploi</p>
+                        </div>
+                      </div>
+                    </Link>
+                  </motion.div>
+                </FadeInStaggerItem>
+              )}
+
+              {/* Généalogie TreeCharts - accessible selon visibilité */}
+              {canSeeCard('genealogie-treecharts') && (
+                <FadeInStaggerItem>
+                  <motion.div
+                    whileHover={{ y: -5, transition: { duration: 0.2 } }}
+                    whileTap={{ scale: 0.98 }}
+                    style={{ display: 'block', height: '100%' }}
+                    className="relative"
+                  >
+                    {user?.status === 'administrateur' && (
+                      <div className="absolute top-2 left-2 z-10">
+                        <label className="flex items-center gap-2 px-2 rounded">
+                          <input
+                            type="checkbox"
+                            checked={cardVisibility['genealogie-treecharts']}
+                            onChange={() => toggleCardVisibility('genealogie-treecharts')}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-4 h-4 text-amber-600 focus:ring-amber-500 border-gray-300 rounded"
+                          />
+                          <span className="text-xs text-gray-600">Afficher</span>
+                        </label>
+                      </div>
+                    )}
+                    <Link
+                      href="/genealogie-alternatives/treecharts"
+                      className="group relative bg-white dark:bg-gray-800 p-6 focus-within:ring-2 focus-within:ring-inset focus-within:ring-amber-500 rounded-lg shadow-sm hover:shadow-md transition-shadow block h-full border border-gray-400 dark:border-gray-700 opacity-75"
+                      aria-label="Accéder à l'arbre généalogique avec TreeCharts"
+                    >
+                      <div className="flex items-center space-x-4">
+                        <div className="flex-shrink-0 h-10 w-10 rounded-lg bg-amber-500 flex items-center justify-center">
+                          <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                          </svg>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 justify-between">
+                            <h2 className="text-xl font-medium text-gray-900 dark:text-white whitespace-nowrap">Généalogie TreeCharts</h2>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 whitespace-nowrap">
+                              Alternative 3
+                            </span>
+                          </div>
+                          <p className="mt-1 text-sm text-gray-500 dark:text-gray-300">Arbre avec TreeCharts - Spécialisé généalogie</p>
                         </div>
                       </div>
                     </Link>
