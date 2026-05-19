@@ -1,11 +1,11 @@
 'use client';
 
-import dynamic from 'next/dynamic';
-import { RawNodeDatum } from 'react-d3-tree';
-import { useState, useMemo, useEffect } from 'react';
+import { useMemo, useRef, useState, useEffect } from 'react';
+import { hierarchy } from 'd3-hierarchy';
+import { Tree } from '@visx/hierarchy';
+import { Group } from '@visx/group';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import FamilyTreeNode from '../../components/FamilyTreeNode';
 import { useAuth } from '@/hooks/use-auth';
 import { useToast } from '@/components/ToastProvider';
 import { getErrorMessage } from '@/lib/errors/messages';
@@ -13,61 +13,62 @@ import {
   useGenealogyForm, 
   useGenealogyData, 
   useGenealogyHistory,
-  useGenealogyZoom
+  useGenealogyZoom,
+  useGenealogyDimensions,
+  useGenealogyTree,
+  useGenealogyPositions,
+  useGenealogyDrag,
+  type TreeNode
 } from '@/hooks';
 import { GenealogyMenu } from '@/components/genealogy/GenealogyMenu';
 import { GenealogyHeader } from '@/components/genealogy/GenealogyHeader';
 import { MenuToggleButton } from '@/components/genealogy/MenuToggleButton';
+import { TreeLinksRenderer } from '@/components/genealogy/TreeLinksRenderer';
+import { TreeNodeRenderer } from '@/components/genealogy/TreeNodeRenderer';
+import { 
+  getDefaultImage, 
+  canEdit, 
+  identifyCouples, 
+  createPartnerMap,
+  groupChildrenByParents,
+  resolveCollisions,
+  type Position
+} from '@/utils/genealogy-tree-utils';
 import type { Person } from '@/types/genealogy';
-
-// Lazy loading du composant Tree (lourd ~100KB)
-const Tree = dynamic(
-  () => import('react-d3-tree').then((mod) => mod.default),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-gray-500">Chargement de l'arbre généalogique...</div>
-      </div>
-    ),
-  }
-);
-
-// Modifié pour être compatible avec RawNodeDatum
-interface CustomNodeDatum extends Omit<RawNodeDatum, 'attributes'> {
-  name: string;
-  attributes: {
-    id: string;
-    genre: 'homme' | 'femme';
-    description: string;
-    detail: string | '';
-    dateNaissance: string;
-    dateDeces: string | '';
-    ordreNaissance: number;
-    image: string | '';
-  };
-  children?: CustomNodeDatum[];
-}
-
-type RenderCustomNodeProps = {
-  nodeDatum: CustomNodeDatum;
-  foreignObjectProps?: {
-    width: number;
-    height: number;
-    x: number;
-    y: number;
-  };
-};
 
 type GenealogieClientProps = {
   initialPersons: Person[];
 };
 
+const defaultMargin = { top: 16, left: 40, right: 40, bottom: 40 };
+
 export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
   const router = useRouter();
   const { showToast } = useToast();
   const [isMenuOpen, setIsMenuOpen] = useState(true);
-  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [translate, setTranslate] = useState({ x: 400, y: 40 });
+  const [svgBackgroundFill, setSvgBackgroundFill] = useState('#f9fafb');
+  const svgRef = useRef<SVGSVGElement>(null);
+  
+  // Détecter le thème pour le fond SVG
+  useEffect(() => {
+    const updateSvgBackground = () => {
+      const isDark = document.documentElement.classList.contains('dark');
+      setSvgBackgroundFill(isDark ? '#111827' : '#f9fafb');
+    };
+    
+    updateSvgBackground();
+    
+    // Observer les changements de classe sur l'élément html
+    const observer = new MutationObserver(updateSvgBackground);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+    
+    return () => observer.disconnect();
+  }, []);
   
   const { user } = useAuth({
     redirectIfUnauthenticated: true,
@@ -76,9 +77,9 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
   
   const userStatus = user?.status || '';
   const isAdmin = userStatus === 'administrateur';
-  const canEditUser = userStatus === 'administrateur' || userStatus === 'redacteur';
+  const canEditUser = canEdit(userStatus);
 
-  // Visibilité de la vue principale en fonction des cartes cochées sur l'accueil
+  // Visibilité de la vue Visx en fonction des cartes cochées sur l'accueil
   const [isAllowed, setIsAllowed] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -101,7 +102,7 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
         const allowed = visibility['genealogie'] !== false;
         setIsAllowed(allowed);
       } catch (error) {
-        console.error('Erreur lors du chargement de la visibilité de la vue généalogique principale:', error);
+        console.error('Erreur lors du chargement de la visibilité de la vue Visx:', error);
         // En cas d'erreur réseau, on ne bloque pas l'accès
         setIsAllowed(true);
       }
@@ -137,86 +138,45 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
     toggleHistory
   } = useGenealogyHistory(isAdmin);
   
-  const { zoomLevel, zoomIn, zoomOut } = useGenealogyZoom(0.6);
+  const { zoomLevel, zoomIn, zoomOut } = useGenealogyZoom(1.0);
+  const dimensions = useGenealogyDimensions(isMenuOpen);
+  
+  const {
+    customPositions,
+    setCustomPositions,
+    isSaving,
+    saveToLocalStorage,
+    savePositionsToSupabase,
+    loadPositions
+  } = useGenealogyPositions('genealogy-node-positions', canEditUser);
+  
+  const {
+    isDragging,
+    draggedNodeId,
+    handleMouseDown,
+    handleNodeMouseDown
+  } = useGenealogyDrag(
+    svgRef,
+    translate,
+    (nodeId, position) => {
+      setCustomPositions(prev => {
+        const newMap = new Map(prev);
+        newMap.set(nodeId, position);
+        saveToLocalStorage(newMap);
+        return newMap;
+      });
+    },
+    setTranslate
+  );
+  
+  const treeData = useGenealogyTree(persons);
+  
+  const root = useMemo(() => {
+    if (!treeData) return null;
+    return hierarchy<TreeNode>(treeData);
+  }, [treeData]);
 
-  const treeData = useMemo(() => {
-    const buildFamilyTree = (personsData: Person[]): CustomNodeDatum[] => {
-      if (personsData.length === 0) {
-        return [];
-      }
-
-      const roots = personsData.filter(p => !p.pere && !p.mere);
-      const processedIds = new Set<string>();
-
-      const buildPersonNode = (person: Person): CustomNodeDatum | null => {
-        if (processedIds.has(person.id)) {
-          return null;
-        }
-
-        processedIds.add(person.id);
-
-        const children = personsData
-          .filter(p => (p.pere === person.id || p.mere === person.id))
-          .sort((a, b) => a.ordreNaissance - b.ordreNaissance);
-
-        const childNodes = children
-          .map(child => buildPersonNode(child))
-          .filter((node): node is CustomNodeDatum => node !== null);
-
-        return {
-          name: `${person.prenom} ${person.nom}`,
-          attributes: {
-            id: person.id,
-            genre: person.genre,
-            description: person.description,
-            detail: '',
-            dateNaissance: person.dateNaissance,
-            dateDeces: person.dateDeces || '',
-            ordreNaissance: person.ordreNaissance,
-            image: person.image || ''
-          },
-          children: childNodes.length > 0 ? childNodes : undefined
-        };
-      };
-
-      if (roots.length > 0) {
-        return roots
-          .map(person => buildPersonNode(person))
-          .filter((node): node is CustomNodeDatum => node !== null);
-      }
-
-      if (personsData.length > 0) {
-        const firstPerson = personsData[0];
-        const node = buildPersonNode(firstPerson);
-        return node ? [node] : [];
-      }
-
-      return [];
-    };
-
-    const treeDataResult = buildFamilyTree(persons);
-    
-    if (treeDataResult.length > 0) {
-      return {
-        name: "Famille",
-        attributes: {
-          id: "root",
-          genre: 'homme' as const,
-          description: 'Racine',
-          detail: '',
-          dateNaissance: '',
-          dateDeces: '',
-          ordreNaissance: 0,
-          image: ''
-        },
-        children: treeDataResult
-      };
-    }
-    
-    return null;
-  }, [persons]);
-
-  if (!isAdmin && isAllowed === null) {
+  if (isAllowed === null) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <p className="text-gray-500 dark:text-gray-400">Chargement de la vue généalogique...</p>
@@ -224,7 +184,7 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
     );
   }
 
-  if (!isAdmin && isAllowed === false) {
+  if (isAllowed === false) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center px-4">
@@ -239,6 +199,9 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
     );
   }
 
+  const yMax = Math.max(1200, dimensions.height - defaultMargin.top - defaultMargin.bottom);
+  const xMax = Math.max(800, dimensions.width - defaultMargin.left - defaultMargin.right);
+
   const handleImageUploadError = (errorMessage: string) => {
     console.error("Upload error:", errorMessage);
     showToast(getErrorMessage('FILE_UPLOAD_FAILED'), 'error');
@@ -246,7 +209,6 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
     const formDataCopy = { ...formData };
     if (!formDataCopy.nom && formDataCopy.pere) {
       const pereNode = persons.find(p => p.id === formDataCopy.pere);
@@ -274,13 +236,16 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
     const updatedPerson: Person = {
       ...formData,
       id: editingId,
-      image: formData.image
+      image: formData.image || null,
+      dateDeces: formData.dateDeces || null,
+      mere: formData.mere || null,
+      pere: formData.pere || null,
     };
 
     const success = await updatePerson(updatedPerson);
     if (success) {
       resetForm();
-      setSelectedPersonId(null);
+      setSelectedNodeId(null);
     }
   };
 
@@ -288,36 +253,36 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
     const success = await deletePerson(id);
     if (success) {
       resetForm();
-      setSelectedPersonId(null);
+      setSelectedNodeId(null);
     }
   };
 
-  const handleNodeClick = (nodeDatum: CustomNodeDatum) => {
-    if (nodeDatum.attributes?.id === 'root') return;
-
-    const person = persons.find(p => p.id === nodeDatum.attributes?.id);
+  const handleNodeClick = (node: TreeNode) => {
+    if (node.id === 'root') return;
+    const person = persons.find(p => p.id === node.id);
     if (person) {
       loadPersonIntoForm(person);
-      setSelectedPersonId(person.id);
+      setSelectedNodeId(node.id);
       setIsMenuOpen(true);
     }
   };
 
   const handleSaveAndGoHome = (e?: React.MouseEvent<HTMLAnchorElement | HTMLButtonElement>) => {
     e?.preventDefault();
+    savePositionsToSupabase(customPositions);
     router.push('/accueil');
   };
 
-  const handleBackgroundClick = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.tagName === 'DIV' || (target.tagName === 'svg' && !target.closest('g'))) {
-      setIsMenuOpen(true);
-      resetForm();
-      setSelectedPersonId(null);
-    }
+  const handleBackgroundClick = () => {
+    resetForm();
+    setSelectedNodeId(null);
   };
 
-  const selectedPerson = selectedPersonId ? persons.find(p => p.id === selectedPersonId) : null;
+  const getImage = (node: TreeNode) => {
+    return node.image || getDefaultImage(node.genre);
+  };
+
+  const selectedPerson = selectedNodeId ? persons.find(p => p.id === selectedNodeId) : null;
   const selectedNode = selectedPerson ? {
     name: `${selectedPerson.prenom} ${selectedPerson.nom}`,
     description: selectedPerson.description,
@@ -326,14 +291,28 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
     image: selectedPerson.image
   } : null;
 
+  if (!root) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-500 dark:text-gray-400">Aucune donnée généalogique disponible</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Préparer les données pour le rendu
+  const couplesMap = identifyCouples(persons);
+  const partnerMap = createPartnerMap(couplesMap);
+  const { childrenByCouple, singleParentChildren } = groupChildrenByParents(persons);
+
   return (
-    <main role="main">
-      <motion.div 
-        className="w-screen h-screen bg-gray-100 dark:bg-gray-900 flex"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
-      >
+    <motion.div 
+      className="w-screen h-screen overflow-hidden bg-gray-100 dark:bg-gray-900 flex"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.3 }}
+    >
       <MenuToggleButton 
         isOpen={isMenuOpen} 
         onToggle={() => setIsMenuOpen(!isMenuOpen)} 
@@ -359,89 +338,162 @@ export function GenealogieClient({ initialPersons }: GenealogieClientProps) {
         onToggleHistory={isAdmin ? toggleHistory : undefined}
       />
 
-      {/* Arbre généalogique avec header sticky */}
       <motion.div 
-        className={`flex-1 transition-all duration-300 ${isMenuOpen ? 'ml-96' : 'ml-0'}`}
+        className={`flex-1 transition-all duration-300 ${isMenuOpen ? 'ml-96' : 'ml-0'} overflow-hidden`} 
+        style={{ paddingTop: '0' }}
+        onClick={handleBackgroundClick}
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.5, delay: 0.2 }}
       >
-        <div className="flex flex-col h-full">
-          {/* Header sticky en haut, visible aussi en mode historique */}
-          <div className="sticky top-0 z-10 bg-gray-100/95 dark:bg-gray-900/95 backdrop-blur-sm border-b border-gray-200/60 dark:border-gray-700/60">
-            <GenealogyHeader
-              title="Arbre Généalogique Familial"
-              isRefreshing={isRefreshing}
-              isSaving={false}
-              canEdit={canEditUser}
-              hasPositions={false}
-              zoomLevel={zoomLevel}
-              onRefresh={refreshData}
-              onZoomIn={zoomIn}
-              onZoomOut={zoomOut}
-              onGoHome={handleSaveAndGoHome}
-              isMenuOpen={isMenuOpen}
-            />
-          </div>
+        <GenealogyHeader
+          title="Arbre Généalogique"
+          isRefreshing={isRefreshing}
+          isSaving={isSaving}
+          canEdit={canEditUser}
+          hasPositions={customPositions.size > 0}
+          zoomLevel={zoomLevel}
+          onRefresh={refreshData}
+          onSavePositions={() => savePositionsToSupabase(customPositions)}
+          onZoomIn={zoomIn}
+          onZoomOut={zoomOut}
+          onGoHome={handleSaveAndGoHome}
+          isMenuOpen={isMenuOpen}
+        />
 
-          {/* Zone scrollable pour l'arbre et l'historique, header reste fixe */}
-          <div
-            className="flex-1 overflow-auto"
-            style={{ paddingTop: '0' }}
-            onClick={handleBackgroundClick}
+        {dimensions.width > 0 && dimensions.height > 0 && root && (
+          <svg 
+            ref={svgRef}
+            width={dimensions.width}
+            height={dimensions.height}
+            style={{ display: 'block', cursor: isDragging ? 'grabbing' : 'grab' }}
+            onMouseDown={handleMouseDown}
           >
-            {treeData ? (
-              <div 
-                className="w-full h-full bg-white dark:bg-gray-900"
-                style={{ width: '100%', height: '100%', position: 'relative', minHeight: '600px' }}
-              >
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.5, delay: 0.5 }}
-                  style={{ width: '100%', height: '100%' }}
+            <rect width="100%" height="100%" fill={svgBackgroundFill} />
+            <g transform={`translate(${translate.x}, ${translate.y}) scale(${zoomLevel})`}>
+              <Group top={0} left={0}>
+                <Tree<TreeNode>
+                  root={root}
+                  size={[yMax, xMax]}
+                  nodeSize={[220, 200]}
+                  separation={(a, b) => {
+                    if (a.parent === b.parent) {
+                      return 1;
+                    }
+                    return 1.0 / (a.depth * 2 + 1);
+                  }}
                 >
-                  <div id="tree-wrapper" style={{ width: '100%', height: '100%', minHeight: '600px' }}>
-                    <Tree
-                      data={treeData as unknown as RawNodeDatum}
-                      renderCustomNodeElement={(rd) => (
-                        <g onClick={(e) => {
-                          e.stopPropagation();
-                          handleNodeClick(rd.nodeDatum as unknown as CustomNodeDatum);
-                          setIsMenuOpen(true);
-                        }}>
-                          <FamilyTreeNode nodeDatum={rd.nodeDatum as unknown as CustomNodeDatum} />
-                        </g>
-                      )}
-                      orientation="vertical"
-                      pathFunc="step"
-                      translate={{ x: 400, y: 100 }}
-                      separation={{ siblings: 2, nonSiblings: 2.5 }}
-                      zoom={zoomLevel}
-                      nodeSize={{ x: 200, y: 120 }}
-                    />
-                  </div>
-                </motion.div>
-              </div>
-            ) : (
-              <motion.div 
-                className="flex items-center justify-center h-full"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-              >
-                <div>
-                  <p>Chargement de l&apos;arbre généalogique...</p>
-                  <p className="text-sm text-gray-500 mt-2">
-                    {persons.length === 0 ? 'Aucune donnée disponible' : `Chargement de ${persons.length} personne(s)...`}
-                  </p>
-                </div>
-              </motion.div>
-            )}
-          </div>
-        </div>
+                  {(tree) => {
+                    const nodeWidth = 200;
+                    const nodeHeight = 100;
+                    const minSpacing = 30;
+                    const coupleSpacing = 50;
+                    
+                    const nodes = tree.descendants().filter(n => n.data.id !== 'root');
+                    
+                    interface NodePosition {
+                      id: string;
+                      x: number;
+                      y: number;
+                      depth: number;
+                      node: typeof nodes[0];
+                    }
+                    
+                    const nodePositions: NodePosition[] = nodes.map(node => ({
+                      id: node.data.id,
+                      x: node.x || 0,
+                      y: node.y || 0,
+                      depth: node.depth,
+                      node: node
+                    }));
+                    
+                    // Regrouper les couples
+                    for (let depth = 0; depth <= Math.max(...nodePositions.map(n => n.depth)); depth++) {
+                      const nodesAtDepth = nodePositions.filter(n => n.depth === depth);
+                      if (nodesAtDepth.length === 0) continue;
+                      
+                      const processedCouples = new Set<string>();
+                      nodesAtDepth.forEach(nodePos => {
+                        const partnerId = partnerMap.get(nodePos.id);
+                        if (partnerId && !processedCouples.has(nodePos.id) && !processedCouples.has(partnerId)) {
+                          const partnerNode = nodesAtDepth.find(n => n.id === partnerId);
+                          if (partnerNode) {
+                            processedCouples.add(nodePos.id);
+                            processedCouples.add(partnerId);
+                            
+                            const node1IsHomme = nodePos.node.data.genre === 'homme';
+                            const pereNode = node1IsHomme ? nodePos : partnerNode;
+                            const mereNode = node1IsHomme ? partnerNode : nodePos;
+                            
+                            const centerX = (nodePos.x + partnerNode.x) / 2;
+                            pereNode.x = centerX - coupleSpacing / 2 - nodeWidth / 2;
+                            mereNode.x = centerX + coupleSpacing / 2 + nodeWidth / 2;
+                          }
+                        }
+                      });
+                    }
+                    
+                    resolveCollisions(nodePositions, nodeWidth, minSpacing, coupleSpacing, partnerMap);
+                    
+                    const positionMap = new Map<string, Position>();
+                    nodePositions.forEach(nodePos => {
+                      const customPos = customPositions.get(nodePos.id);
+                      positionMap.set(nodePos.id, customPos || { x: nodePos.x, y: nodePos.y });
+                    });
+                    
+                    return (
+                      <Group>
+                        <TreeLinksRenderer
+                          persons={persons}
+                          positionMap={positionMap}
+                          nodeWidth={nodeWidth}
+                          couplesMap={couplesMap}
+                          childrenByCouple={childrenByCouple}
+                          singleParentChildren={singleParentChildren}
+                          useVisx={true}
+                        />
+                        
+                        {tree.descendants().map((node, i) => {
+                          const nodeData = node.data;
+                          if (nodeData.id === 'root') return null;
+                          
+                          const adjustedPosition = positionMap.get(nodeData.id);
+                          const top = adjustedPosition?.y ?? node.y ?? 0;
+                          const left = adjustedPosition?.x ?? node.x ?? 0;
+                          
+                          const isDead = !!nodeData.dateDeces;
+                          const isSelected = selectedNodeId === nodeData.id;
+
+                          return (
+                            <TreeNodeRenderer
+                              key={`node-${nodeData.id}-${i}`}
+                              node={nodeData}
+                              x={left}
+                              y={top}
+                              nodeWidth={nodeWidth}
+                              nodeHeight={nodeHeight}
+                              isDead={isDead}
+                              isSelected={isSelected}
+                              isDragging={isDragging}
+                              canEdit={canEditUser}
+                              draggedNodeId={draggedNodeId}
+                              onNodeMouseDown={handleNodeMouseDown}
+                              onNodeClick={handleNodeClick}
+                              getImage={getImage}
+                              style="default"
+                            />
+                          );
+                        })}
+                      </Group>
+                    );
+                  }}
+                </Tree>
+              </Group>
+            </g>
+          </svg>
+        )}
       </motion.div>
-      </motion.div>
-    </main>
+    </motion.div>
   );
 }
 

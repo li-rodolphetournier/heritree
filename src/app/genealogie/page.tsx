@@ -13,6 +13,8 @@ import type { Person } from '@/types/genealogy';
 export const dynamic = 'force-dynamic';
 
 export default async function Genealogie() {
+  let shouldRedirect = false;
+
   // Vérifier la visibilité de la carte (uniquement si les variables d'environnement sont disponibles)
   try {
     if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
@@ -33,10 +35,10 @@ export default async function Genealogie() {
             .from('genealogy_card_visibility')
             .select('is_visible')
             .eq('card_key', 'genealogie')
-            .single();
+            .maybeSingle();
 
-          if (!visibility?.is_visible) {
-            redirect('/accueil');
+          if (visibility && visibility.is_visible === false) {
+            shouldRedirect = true;
           }
         }
       }
@@ -48,6 +50,10 @@ export default async function Genealogie() {
     } else {
       console.error('Erreur lors de la vérification de la visibilité:', error);
     }
+  }
+
+  if (shouldRedirect) {
+    redirect('/accueil');
   }
 
   // Récupération des données initiales côté serveur
